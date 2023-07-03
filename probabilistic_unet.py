@@ -6,6 +6,10 @@ from utils import init_weights,init_weights_orthogonal_normal, l2_regularisation
 import torch.nn.functional as F
 from torch.distributions import Normal, Independent, kl
 
+# escnn library for implementing equivariant CNN -> This will be used to make Kendall shape space embedding
+from escnn import gspaces
+from escnn import nn as escnn_nn
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class Encoder(nn.Module):
@@ -49,6 +53,30 @@ class Encoder(nn.Module):
     def forward(self, input):
         output = self.layers(input)
         return output
+
+"""
+escnn encoder to encode equivariant object
+"""
+class EquiEncoder(Encoder):
+
+
+    def __init__(self, input_channels, num_filters, no_convs_per_block, initializer, padding = True, posterior = Flase):
+        super().__init__(self, input_channels, num_filters, no_convs_per_block, initializer, padding, posterior)
+        # define equivariant encoder
+        # rotation axis
+        self.r2_act = gspaces.ro2d0nR2(N = -1)
+        # the group SO(2)
+        
+        layers = []
+        for i in range(len(self.num_filters)):
+            #TODO: implement equivariant encoder
+            pass
+
+        # aggregate the layer and make a model
+        self.layers = nn.Sequential(*layers)
+        # init
+        self.layers_apply(init_weights)
+
 
 class AxisAlignedConvGaussian(nn.Module):
     """
