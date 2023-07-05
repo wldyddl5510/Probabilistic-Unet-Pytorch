@@ -3,7 +3,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 from load_LIDC_data import LIDC_IDRI
-from probabilistic_unet import ProbabilisticUnet
+from probabilistic_unet import ProbabilisticUnet, KendallProbUnet
 from utils import l2_regularisation
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -19,7 +19,8 @@ train_loader = DataLoader(dataset, batch_size=5, sampler=train_sampler)
 test_loader = DataLoader(dataset, batch_size=1, sampler=test_sampler)
 print("Number of training/test patches:", (len(train_indices),len(test_indices)))
 
-net = ProbabilisticUnet(input_channels=1, num_classes=1, num_filters=[32,64,128,192], latent_dim=2, no_convs_fcomb=4, beta=10.0)
+# net = ProbabilisticUnet(input_channels=1, num_classes=1, num_filters=[32,64,128,192], latent_dim=2, no_convs_fcomb=4, beta=10.0)
+net = KendallProbUnet(input_channels=1, num_classes=1, num_filters=[32,64,128,192], latent_dim=2, no_convs_fcomb=4, beta=10.0)
 net.to(device)
 optimizer = torch.optim.Adam(net.parameters(), lr=1e-4, weight_decay=0)
 epochs = 10
