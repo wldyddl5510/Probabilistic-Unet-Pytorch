@@ -36,3 +36,4 @@ for epoch in range(epochs):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+    print("Epoch %d of %d"%(epoch, epochs))
