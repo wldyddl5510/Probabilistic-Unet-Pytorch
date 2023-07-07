@@ -7,13 +7,9 @@ from probabilistic_unet import ProbabilisticUnet, KendallProbUnet
 from utils import l2_regularisation
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-<<<<<<< HEAD
 # print(device)
 dataset = LIDC_IDRI(dataset_location = 'LIDC_data/')
 print("reading dataset complete")
-=======
-dataset = LIDC_IDRI(dataset_location = 'data/')
->>>>>>> parent of 8e7f9ac (encoder debugging done. Need to handle distribution part)
 dataset_size = len(dataset)
 indices = list(range(dataset_size))
 split = int(np.floor(0.1 * dataset_size))

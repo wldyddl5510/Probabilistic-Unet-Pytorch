@@ -62,33 +62,39 @@ Use N = 8 for temporary
 class EquiEncoder(Encoder):
 
 
-    def __init__(input_channels, num_filters, no_convs_per_block, initializer, padding = True, posterior = Flase):
-        super().__init__(self, input_channels, num_filters, no_convs_per_block, initializer, padding, posterior)
+    def __init__(self, input_channels, num_filters, no_convs_per_block, initializer, padding = True, posterior = False):
+        super().__init__(input_channels, num_filters, no_convs_per_block, initializer, padding, posterior)
         # define equivariant encoder
         # code from https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/DL2/Geometric_deep_learning/tutorial2_steerable_cnns.html#3.-Build-and-Train-Steerable-CNNs
-        # rotation axis N = -1 stands for continuous rotations
-        self.r2_act = gspaces.ro2d0nR2(N = -1)
+        # rotation axis N = 8 stands for 8 directions
+        self.r2_act = gspaces.rot2dOnR2(N = 8)
 
         # the group SO(2)
         self.G: SO2 = self.r2_act.fibergroup
 
+        if posterior:
+            # increased input channels are considered for the input types too
+            in_type = escnn_nn.FieldType(self.r2_act, [self.r2_act.trivial_repr, self.r2_act.trivial_repr])
+        else:
+            in_type = escnn_nn.FieldType(self.r2_act, [self.r2_act.trivial_repr])
+        self.input_type = in_type
         
+        # construct layers
         layers = []
         for i in range(len(self.num_filters)):
             #TODO: implement equivariant encoder
             # other than 1st layer
             if i != 0:
-                layers.append(escnn_nn.AvgPool2d(kernel_size=2, stride=2, padding=0, ceil_mode=True))
-                # in_type comes from the out_type of previous layers
                 in_type = layers[-1].out_type
+                layers.append(escnn_nn.PointwiseAvgPool2D(in_type, kernel_size=2, stride=2, padding=0, ceil_mode=True))
+                # in_type comes from the out_type of previous layers
             # first layer
             else:
                 # i = 0
                 # we store the input type for wrapping the images into a geometric tensor during the forward pass
-                in_type = escnn_nn.FieldType(self.r2_act, [self.r2_act.trivial_repr])
                 # We need to mask the input image since the corners are moved outside the grid under rotations
-                # 29 comes from MNIST
-                layers.append(escnn_nn.MaskModule(in_type, 29, margin=1))
+                
+                layers.append(escnn_nn.MaskModule(in_type, 128, margin=1))
             
             # output is wrapped as well
             out_type = escnn_nn.FieldType(self.r2_act, num_filters[i] * [self.r2_act.regular_repr])
@@ -106,6 +112,12 @@ class EquiEncoder(Encoder):
         # init
         # self.layers_apply(init_weights)
 
+
+    def forward(self, input):
+        # convert into geometric tensor
+        input_geom = self.input_type(input)
+        self.layers(input_geom)
+        return input_geom.tensor
 
 class AxisAlignedConvGaussian(nn.Module):
     """
@@ -175,16 +187,25 @@ class KendallShapeVmf(AxisAlignedConvGaussian):
     def __init__(self, input_channels, num_filters, no_convs_per_block, latent_dim, initializers, posterior=False):
         super().__init__(input_channels, num_filters, no_convs_per_block, latent_dim, initializers, posterior)
         self.encoder = EquiEncoder(self.input_channels, self.num_filters, self.no_convs_per_block, initializers, posterior=self.posterior)
-        r2_act = gspaces.ro2d0nR2(N = -1)
-        in_type = escnn_nn.FieldType(r2_act, num_filter[-1] * [r2_act.trivial_repr])
+        # self.concent_encoder = Encoder(self.input_channels, self.num_filters, self.no_convs_per_block, initiliazers, posterior = self.posterior)
+        # self.rot = Encoder(self.input_channels, self.num_filters, self,no_convs_per_block, initiliazers, posterior = self.posterior)
+        r2_act = gspaces.rot2dOnR2(N = 8)
+        in_type = escnn_nn.FieldType(r2_act, num_filters[-1] * [r2_act.regular_repr])
+        # wrapper for the geometric tensor
+        self.input_type = in_type
         # latent dim is consist of (k - 1) * m - 1 hyperspherical vmf distribution.
         # k landmark is up to our choice, and m = 2 dim if we are in 2d setting.
         # k = 4 and m = 2 temporary.
         self.latent_dim = (4 - 1) * 2 - 1
         # output -> return mean (self.latent_dim-dimensional), concentration (1-dimensional), and rotation vector (2-dim)
-        out_type = escnn_nn.FieldType(r2_act, (self.latent_dim + 3) * [r2_act.regular_repr])
+        out_type = escnn_nn.FieldType(r2_act, (self.latent_dim) * [r2_act.regular_repr])
         # self.conv_layer = escnn_nn.R2Conv(num_filters[-1], 2 * self.latent_dim, (1,1), stride=1)
-        self.conv_layer = escnn_nn.R2Conv(in_type, out_type, (1,1), stride=1)
+        # return vector in Kendall Shape space; need to be equivariant.
+        self.conv_layer_mu = escnn_nn.R2Conv(in_type, out_type, kernel_size = 1, stride=1)
+        # return scalar; need not be rotation equivariant
+        self.conv_layer_concent = nn.Conv2d(num_filters[-1], 1, kernel_size = (1,1), stride = 1)
+        # return SO(m); need not be rotation equivariant
+        self.conv_layer_rot = nn.Conv2d(num_filters[-1], 2, kernel_size = (1,1), stride = 1)
 
 
     def forward(self, input, segm=None):
@@ -204,25 +225,39 @@ class KendallShapeVmf(AxisAlignedConvGaussian):
         encoding = torch.mean(encoding, dim=2, keepdim=True)
         encoding = torch.mean(encoding, dim=3, keepdim=True)
 
-        #Convert encoding to latent dim + 3 and split up for mu, concentration param, and rotation matrix
-        mu_concent_rot = self.conv_layer(encoding)
+        #Convert encoding to mu, concentration param, and rotation matrix using different last layers
+        # need to convert encoding to geometric tensor for escnn
+        mu_input = self.input_type(encoding)
+        mu = self.conv_layer_mu(encoding)
+        # convert back to original tensor
+        mu = mu.tensor
+        # resize to pre-shape space vector: m * k matrix with zero mean and unit norm for each column
+        # m = 2 k = 4 for now. vmf loc parameter
+        mu = mu.view(2, 4)
+        # mean 0, unit vector columns
+        mu_mean = torch.mean(mu, dim = 1)
+        # mean 0
+        torch.sub(mu, mu_mean[:, None])
+        # normalize
+        mu = mu / mu.norm(p = 2.0)
+        # other variables need not be rotation invariant
+        concent = self.conv_layer_concent(encoding)
+        rot = self.conv_layer_rot(encoding)
 
         #We squeeze the second dimension twice, since otherwise it won't work when batch size is equal to 1
-        mu_concent_rot = torch.squeeze(mu_concent, dim=2)
-        mu_concent_rot = torch.squeeze(mu_concent, dim=2)
-
-        # mu of vmf distribution
-        mu = mu_concent_rot[:,:self.latent_dim]
-        # normalize, as \mu of vmf is always a unit vector
-        mu = mu / mu.norm(dim=-1, keepdim=True)
+        #mu_concent_rot = torch.squeeze(mu_concent, dim=2)
+        #mu_concent_rot = torch.squeeze(mu_concent, dim=2)
+        mu = torch.squeeze(mu, dim = 2)
+        mu = torch.squeeze(mu, dim = 2)
         # concentration param
-        concent = mu_concent_rot[:,self.latent_dim:(self.latent_dim + 1)]
+        #concent = mu_concent_rot[:,self.latent_dim:(self.latent_dim + 1)]
         # the `+ 1` prevent collapsing behaviors
         concent = F.softplus(concent) + 1
         # rotation matrix
-        rot = mu_concent_rot[:,(self.latent_dim + 1):]
-        rot = rot / rot.norm(dim=-1, keepdim=True)
+        #rot = mu_concent_rot[:,(self.latent_dim + 1):]
+        rot = F.normalize(rot, p = 2.0)
         # convert by matrix
+        # holds only for m = 2
         rot = torch.tensor([[rot[0], -rot[1]],[rot[1], rot[0]]])
 
         # TODO: Implement rotation invariant vmf distribution, by mu_0 = rot^-1 *  mu
@@ -410,7 +445,7 @@ Probabilistic Unet with Kendall Shape space embedding
 class KendallProbUnet(ProbabilisticUnet):
 
 
-    def __init__(input_channels=1, num_classes=1, num_filters=[32,64,128,192], latent_dim=6, no_convs_fcomb=4, beta=10.0):
+    def __init__(self, input_channels=1, num_classes=1, num_filters=[32,64,128,192], latent_dim=6, no_convs_fcomb=4, beta=10.0):
         super().__init__(input_channels, num_classes, num_filters, latent_dim, no_convs_fcomb, beta)
         self.prior = KendallShapeVmf(self.input_channels, self.num_filters, self.no_convs_per_block, self.latent_dim,  self.initializers).to(device)
         self.posterior = KendallShapeVmf(self.input_channels, self.num_filters, self.no_convs_per_block, self.latent_dim, self.initializers, posterior=True).to(device)
