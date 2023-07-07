@@ -57,6 +57,7 @@ class Encoder(nn.Module):
 
 """
 escnn encoder to encode equivariant layer
+Use N = 8 for temporary
 """
 class EquiEncoder(Encoder):
 
