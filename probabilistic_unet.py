@@ -71,14 +71,9 @@ class EquiEncoder(Encoder):
 
         # the group SO(2)
         self.G: SO2 = self.r2_act.fibergroup
-
-        if posterior:
-            # increased input channels are considered for the input types too
-            in_type = escnn_nn.FieldType(self.r2_act, [self.r2_act.trivial_repr, self.r2_act.trivial_repr])
-        else:
-            in_type = escnn_nn.FieldType(self.r2_act, [self.r2_act.trivial_repr])
+        in_type = escnn_nn.FieldType(self.r2_act, self.input_channels * [self.r2_act.trivial_repr])
         self.input_type = in_type
-        
+
         # construct layers
         layers = []
         for i in range(len(self.num_filters)):
@@ -116,6 +111,8 @@ class EquiEncoder(Encoder):
     def forward(self, input):
         # convert into geometric tensor
         input_geom = self.input_type(input)
+        print(self.layers)
+        print(input.shape)
         self.layers(input_geom)
         return input_geom.tensor
 
@@ -162,7 +159,6 @@ class AxisAlignedConvGaussian(nn.Module):
         #We only want the mean of the resulting hxw image
         encoding = torch.mean(encoding, dim=2, keepdim=True)
         encoding = torch.mean(encoding, dim=3, keepdim=True)
-
         #Convert encoding to 2 x latent dim and split up for mu and log_sigma
         mu_log_sigma = self.conv_layer(encoding)
 
@@ -189,19 +185,20 @@ class KendallShapeVmf(AxisAlignedConvGaussian):
         self.encoder = EquiEncoder(self.input_channels, self.num_filters, self.no_convs_per_block, initializers, posterior=self.posterior)
         # self.concent_encoder = Encoder(self.input_channels, self.num_filters, self.no_convs_per_block, initiliazers, posterior = self.posterior)
         # self.rot = Encoder(self.input_channels, self.num_filters, self,no_convs_per_block, initiliazers, posterior = self.posterior)
-        r2_act = gspaces.rot2dOnR2(N = 8)
-        in_type = escnn_nn.FieldType(r2_act, num_filters[-1] * [r2_act.regular_repr])
+        self.r2_act = gspaces.rot2dOnR2(N = 8)
+        self.input_type = escnn_nn.FieldType(self.r2_act, self.input_channels * [self.r2_act.trivial_repr])
         # wrapper for the geometric tensor
-        self.input_type = in_type
+#self.input_type = self.encoder.layers[-1].out_type
+        print(self.input_type)
         # latent dim is consist of (k - 1) * m - 1 hyperspherical vmf distribution.
         # k landmark is up to our choice, and m = 2 dim if we are in 2d setting.
         # k = 4 and m = 2 temporary.
         self.latent_dim = (4 - 1) * 2 - 1
         # output -> return mean (self.latent_dim-dimensional), concentration (1-dimensional), and rotation vector (2-dim)
-        out_type = escnn_nn.FieldType(r2_act, (self.latent_dim) * [r2_act.regular_repr])
+        out_type = escnn_nn.FieldType(self.r2_act, (self.latent_dim) * [self.r2_act.regular_repr])
         # self.conv_layer = escnn_nn.R2Conv(num_filters[-1], 2 * self.latent_dim, (1,1), stride=1)
         # return vector in Kendall Shape space; need to be equivariant.
-        self.conv_layer_mu = escnn_nn.R2Conv(in_type, out_type, kernel_size = 1, stride=1)
+        self.conv_layer_mu = escnn_nn.R2Conv(self.input_type, out_type, kernel_size = 1, stride=1)
         # return scalar; need not be rotation equivariant
         self.conv_layer_concent = nn.Conv2d(num_filters[-1], 1, kernel_size = (1,1), stride = 1)
         # return SO(m); need not be rotation equivariant
@@ -220,13 +217,16 @@ class KendallShapeVmf(AxisAlignedConvGaussian):
 
         encoding = self.encoder(input)
         self.show_enc = encoding
-
         #We only want the mean of the resulting hxw image
         encoding = torch.mean(encoding, dim=2, keepdim=True)
         encoding = torch.mean(encoding, dim=3, keepdim=True)
-
         #Convert encoding to mu, concentration param, and rotation matrix using different last layers
         # need to convert encoding to geometric tensor for escnn
+#r2_act = gspaces.rot2dOnR2(N = 8)
+#if self.posterior:
+#in_type = escnn_nn.FieldType(r2_act, [r2_act.trivial_repr])
+#else:
+#in_type = escnn_nn.FieldType(r2_act, [r2_act.trivial_repr, r2_act.trivial_repr])
         mu_input = self.input_type(encoding)
         mu = self.conv_layer_mu(encoding)
         # convert back to original tensor
