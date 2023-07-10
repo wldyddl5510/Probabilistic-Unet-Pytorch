@@ -99,6 +99,8 @@ class EquiEncoder(Encoder):
 
 
         # aggregate the layer and make a model
+        # aggregate group operations
+        layers.append(escnn_nn.GroupPooling(out_type))
         self.layers = escnn_nn.SequentialModule(*layers)
         # init
         # self.layers_apply(init_weights)
@@ -180,20 +182,13 @@ class KendallShapeVmf(AxisAlignedConvGaussian):
         # append last filter as latent dim
         self.encoder_mu = EquiEncoder(self.input_channels, self.num_filters, self.no_convs_per_block, initializers, posterior=self.posterior)
         out_dim = self.encoder_mu.layers[-1].out_type.size
-        #self.conv_layer_mu = nn.Conv2d(out_dim, self.latent_dim, kernel_size = 1, stride = 1)
-        #self.conv_layer_mu = nn.Linear(out_dim, self.latent_dim)
-        self.r2_act = gspaces.rot2dOnR2(N = 8)
-        self.input_type = escnn_nn.FieldType(self.r2_act, self.num_filters[-1] * [self.r2_act.trivial_repr])
+        self.conv_layer_mu = nn.Conv2d(out_dim, self.latent_dim, kernel_size = 1, stride = 1)
         # append last filter as 1 for concent
-        self.encoder_concent = Encoder(self.input_channels, self.num_filters + [1], self.no_convs_per_block, initializers, posterior = self.posterior)
+        self.encoder_concent_rot = Encoder(self.input_channels, self.num_filters, self.no_convs_per_block, initializers, posterior = self.posterior)
+        self.layer_concent = nn.Linear(self.num_filters[-1], 1)
+        self.layer_rot = nn.Linear(self.num_filters[-1], 2)
         # append last filter as 2 for rotation matrix
-        self.encoder_rot = Encoder(self.input_channels, self.num_filters + [2], self.no_convs_per_block, initializers, posterior = self.posterior)
-        # wrapper for the geometric tensor
-        # output -> return mean (self.latent_dim-dimensional), concentration (1-dimensional), and rotation vector (2-dim)
-        # return vector in Kendall Shape space; need to be equivariant.
-        out_type = escnn_nn.FieldType(self.r2_act, self.latent_dim * [self.r2_act.regular_repr])
-        self.conv_layer_mu = escnn_nn.R2Conv(self.input_type, out_type, kernel_size = 1, stride=1)
-        # return scalar; need not be rotation equivariant
+        # self.encoder_rot = Encoder(self.input_channels, self.num_filters, self.no_convs_per_block, initializers, posterior = self.posterior)
         #self.conv_layer_concent = nn.Conv2d(num_filters[-1], 1, kernel_size = (1,1), stride = 1)
         # return SO(m); need not be rotation equivariant
         #self.conv_layer_rot = nn.Conv2d(num_filters[-1], 2, kernel_size = (1,1), stride = 1)
@@ -209,27 +204,18 @@ class KendallShapeVmf(AxisAlignedConvGaussian):
             self.show_concat = input
             self.sum_input = torch.sum(input)
         # encoder returns mu
-        encoding = self.encoder(input)
         encoding_mu = self.encoder_mu(input)
-        print(encoding.shape)
-        print(encoding_mu.shape)
-        self.show_enc = encoding
+        self.show_enc = encoding_mu
         #We only want the mean of the resulting hxw image
-        encoding = torch.mean(encoding, dim=2, keepdim=True)
-        encoding = torch.mean(encoding, dim=3, keepdim=True)
-        print(encoding.shape)
         encoding_mu = torch.mean(encoding_mu, dim = 2, keepdim = True)
         encoding_mu = torch.mean(encoding_mu, dim = 3, keepdim = True)
-        print(encoding_mu.shape)
         mu = self.conv_layer_mu(encoding_mu)
-        print(mu.shape)
-        print(self.conv_layer(encoding).shape)
-        mu = torch.mean(mu, dim = 2, keepdim = True)
-        mu = torch.mean(mu, dim = 3, keepdim = True)
+        # we squeeze the second dimension twice since o.w. won't work when batch size == 1
+        mu = torch.squeeze(mu, dim = 2)
+        mu = torch.squeeze(mu, dim = 2)
         # m = 2 k = 4 for now.
-        mu = encoding.view(2, 4)
-        # convert back to original tensor
-        # resize to pre-shape space vector: m * k matrix with zero mean and unit norm for each column
+        # resize to the pre-shape space matrix
+        mu = mu.view(-1, 2, 4)
         # m = 2 k = 4 for now. vmf loc parameter
         # mean 0, unit vector columns
         mu_mean = torch.mean(mu, dim = 1)
@@ -238,16 +224,23 @@ class KendallShapeVmf(AxisAlignedConvGaussian):
         # normalize
         mu = mu / mu.norm(p = 2.0)
         # other variables need not be rotation invariant
-        concent = self.encoder_concent(input)
+        concent_rot = self.encoder_concent_rot(input)
+        concent_rot = torch.mean(concent_rot, dim = 2, keepdim = True)
+        concent_rot = torch.mean(concent_rot, dim = 3, keepdim = True)
+        concent= self.layer_concent(concent_rot)
+        rot = self.layer_rot(concent_rot)
+        print(concent.shape)
+        concent = torch.squeeze(concent, dim = 2)
+        concent = torch.squeeze(concent, dim = 2)
+        print(concent.shape)
         # + 1 prevent collapsing behavior 
+        print(concent.shape)
         concent = F.softplus(concent) + 1
         rot = self.encoder_rot(input)
         # rotation matrix
         rot = F.normalize(rot, p = 2.0)
         # m =2  for now
         #We squeeze the second dimension twice, since otherwise it won't work when batch size is equal to 1
-        mu = torch.squeeze(mu, dim = 2)
-        mu = torch.squeeze(mu, dim = 2)
         # holds only for m = 2
         rot = torch.tensor([[rot[0], -rot[1]],[rot[1], rot[0]]])
 
