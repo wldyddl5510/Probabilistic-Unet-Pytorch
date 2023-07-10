@@ -229,17 +229,20 @@ class KendallShapeVmf(AxisAlignedConvGaussian):
         concent_rot = self.encoder_concent_rot(input)
         concent_rot = torch.mean(concent_rot, dim = 2, keepdim = True)
         concent_rot = torch.mean(concent_rot, dim = 3, keepdim = True)
-        concent= self.layer_concent(concent_rot)
-        rot = self.layer_rot(concent_rot)
+        concent= self.conv_layer_concent(concent_rot)
+        rot = self.conv_layer_rot(concent_rot)
         concent = torch.squeeze(concent, dim = 2)
         concent = torch.squeeze(concent, dim = 2)
+        rot = torch.squeeze(rot, dim = 2)
+        rot = torch.squeeze(rot, dim = 2)
         # + 1 prevent collapsing behavior 
-        print(concent.shape)
         concent = F.softplus(concent) + 1
         # rotation matrix
         rot = F.normalize(rot, p = 2.0, dim = 1)
         # make rotation matrices
+        print(concent.shape)
         rot = torch.stack((rot[:, 0], -rot[:, 1], rot[:, 1], rot[:, 0])).T.view(-1, self.m, self.m)
+        print(rot.shape)
         # rot = torch.tensor([[rot[0], -rot[1]],[rot[1], rot[0]]])
 
         # TODO: Implement rotation invariant vmf distribution, by mu_0 = rot^-1 *  mu
